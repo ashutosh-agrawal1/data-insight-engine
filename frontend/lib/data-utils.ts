@@ -15,12 +15,71 @@ export interface DatasetInfo {
   columns: DatasetColumn[]
   data: Record<string, unknown>[]
   uploadedAt: string
+  // Python backend analysis results
+  pythonAnalysis?: PythonAnalysisResult
 }
 
 export interface ParsedDataset {
   data: Record<string, unknown>[]
   columns: DatasetColumn[]
   rows: number
+}
+
+// Types for Python backend response
+export interface StatisticalSummary {
+  column: string
+  mean: number
+  median: number
+  std_dev: number
+  min_val: number
+  max_val: number
+  skewness: number
+  kurtosis: number
+}
+
+export interface CorrelationPair {
+  column1: string
+  column2: string
+  correlation: number
+}
+
+export interface CategoryCount {
+  column: string
+  value_counts: Record<string, number>
+}
+
+export interface PythonAnalysisResult {
+  rows: number
+  columns: number
+  column_info: {
+    name: string
+    type: string
+    unique: number
+    missing: number
+    sample: string[]
+  }[]
+  missing_summary: Record<string, number>
+  statistical_summary: StatisticalSummary[]
+  correlation_matrix: CorrelationPair[]
+  top_categories: CategoryCount[]
+}
+
+// Analyze data using Python backend
+export async function analyzeWithPython(data: Record<string, unknown>[]): Promise<PythonAnalysisResult> {
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ data }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Analysis failed: ${errorText}`)
+  }
+
+  return response.json()
 }
 
 // Detect column type from values
