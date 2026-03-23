@@ -21,10 +21,8 @@ import {
   analyzeColumns,
   saveDataset,
   formatFileSize,
-  analyzeWithPython,
   type DatasetColumn,
   type DatasetInfo,
-  type PythonAnalysisResult,
 } from "@/lib/data-utils"
 
 interface FilePreview {
@@ -137,70 +135,34 @@ export default function UploadPage() {
     setParseError(null)
     
     const steps = [
-      "Sending data to Python backend...",
-      "Running Pandas analysis...",
-      "Calculating statistics with NumPy...",
-      "Computing correlations...",
+      "Validating data structure...",
+      "Detecting patterns...",
+      "Finding anomalies...",
       "Generating insights...",
     ]
 
-    let pythonAnalysis: PythonAnalysisResult | undefined
+    for (const step of steps) {
+      setAnalysisStep(step)
+      await new Promise((resolve) => setTimeout(resolve, 800))
+    }
 
-    try {
-      // Show initial step
-      setAnalysisStep(steps[0])
-      
-      // Call the Python backend for analysis
-      const analysisPromise = analyzeWithPython(filePreview.data)
-      
-      // Animate through steps while waiting for the analysis
-      let stepIndex = 1
-      const stepInterval = setInterval(() => {
-        if (stepIndex < steps.length) {
-          setAnalysisStep(steps[stepIndex])
-          stepIndex++
-        }
-      }, 600)
-      
-      // Wait for the Python analysis to complete
-      pythonAnalysis = await analysisPromise
-      
-      // Clear the step animation
-      clearInterval(stepInterval)
-      setAnalysisStep("Saving results...")
-      
-      // Update columns with Python analysis results (more accurate type detection)
-      const updatedColumns: DatasetColumn[] = pythonAnalysis.column_info.map(col => ({
-        name: col.name,
-        type: col.type as "Numerical" | "Categorical" | "Date" | "Text",
-        unique: col.unique,
-        missing: col.missing,
-        sample: col.sample,
-      }))
+    // Save dataset to localStorage before navigation
+    const dataset: DatasetInfo = {
+      name: filePreview.name,
+      size: filePreview.size,
+      rows: filePreview.rows,
+      columns: filePreview.columns,
+      data: filePreview.data,
+      uploadedAt: new Date().toISOString(),
+    }
 
-      // Save dataset with Python analysis results to localStorage
-      const dataset: DatasetInfo = {
-        name: filePreview.name,
-        size: filePreview.size,
-        rows: pythonAnalysis.rows,
-        columns: updatedColumns,
-        data: filePreview.data,
-        uploadedAt: new Date().toISOString(),
-        pythonAnalysis: pythonAnalysis,
-      }
-
-      // Use the safe saveDataset function with error handling
-      const result = saveDataset(dataset)
-      
-      if (result.success) {
-        window.location.href = "/dashboard"
-      } else {
-        setParseError(result.error || "Failed to save dataset. Please try a smaller file.")
-        setIsAnalyzing(false)
-      }
-    } catch (error) {
-      console.error("[v0] Python analysis failed:", error)
-      setParseError(error instanceof Error ? error.message : "Failed to analyze data with Python backend.")
+    // Use the safe saveDataset function with error handling
+    const result = saveDataset(dataset)
+    
+    if (result.success) {
+      window.location.href = "/dashboard"
+    } else {
+      setParseError(result.error || "Failed to save dataset. Please try a smaller file.")
       setIsAnalyzing(false)
     }
   }, [filePreview])

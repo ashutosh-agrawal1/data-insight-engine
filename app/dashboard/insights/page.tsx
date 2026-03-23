@@ -17,6 +17,10 @@ import {
   Upload,
 } from "lucide-react"
 import {
+  calculateStats,
+  calculateCorrelation,
+  getNumericValues,
+  getValueCounts,
   type DatasetInfo,
 } from "@/lib/data-utils"
 
@@ -74,45 +78,61 @@ export default function InsightsPage() {
     const storedDataset: DatasetInfo = JSON.parse(stored)
     setDataset(storedDataset)
 
-    const pythonAnalysis = storedDataset.pythonAnalysis
+    // Generate insights from data
+    const numericColumns = storedDataset.columns.filter(col => col.type === "Numerical")
+    const categoricalColumns = storedDataset.columns.filter(col => col.type === "Categorical")
+    
     const generatedInsights: Insight[] = []
     let insightId = 1
 
-    // Use Python analysis results for correlation insights
-    if (pythonAnalysis && pythonAnalysis.correlation_matrix.length > 0) {
-      // Find strongest correlation from Python results
-      let maxCorr = pythonAnalysis.correlation_matrix[0]
-      pythonAnalysis.correlation_matrix.forEach(corr => {
-        if (Math.abs(corr.correlation) > Math.abs(maxCorr.correlation)) {
-          maxCorr = corr
+    // Find strongest correlations
+    if (numericColumns.length >= 2) {
+      let maxCorr = 0
+      let maxPair = ["", ""]
+      
+      for (let i = 0; i < Math.min(numericColumns.length, 5); i++) {
+        for (let j = i + 1; j < Math.min(numericColumns.length, 5); j++) {
+          const col1 = numericColumns[i]
+          const col2 = numericColumns[j]
+          const values1 = getNumericValues(storedDataset.data, col1.name)
+          const values2 = getNumericValues(storedDataset.data, col2.name)
+          const minLen = Math.min(values1.length, values2.length)
+          const r = calculateCorrelation(values1.slice(0, minLen), values2.slice(0, minLen))
+          
+          if (Math.abs(r) > Math.abs(maxCorr)) {
+            maxCorr = r
+            maxPair = [col1.name, col2.name]
+          }
         }
-      })
+      }
 
-      generatedInsights.push({
-        id: insightId++,
-        title: `Strong Relationship: ${maxCorr.column1} & ${maxCorr.column2}`,
-        description: `Python/Pandas analysis reveals a ${maxCorr.correlation > 0 ? "positive" : "negative"} correlation between ${maxCorr.column1} and ${maxCorr.column2}. This relationship explains ${(Math.abs(maxCorr.correlation) * 100).toFixed(0)}% of the variance between these variables.`,
-        metric: `r = ${maxCorr.correlation > 0 ? "+" : ""}${maxCorr.correlation.toFixed(2)}`,
-        correlation: `R² = ${(maxCorr.correlation * maxCorr.correlation).toFixed(2)}`,
-        confidence: Math.abs(maxCorr.correlation) > 0.7 ? "High" : Math.abs(maxCorr.correlation) > 0.4 ? "Medium" : "Low",
-        type: "correlation",
-        icon: TrendingUp,
-        gradient: "from-[#00F5A0] to-[#00D9F5]",
-      })
+      if (maxCorr !== 0) {
+        generatedInsights.push({
+          id: insightId++,
+          title: `Strong Relationship: ${maxPair[0]} & ${maxPair[1]}`,
+          description: `Analysis reveals a ${maxCorr > 0 ? "positive" : "negative"} correlation between ${maxPair[0]} and ${maxPair[1]}. This relationship explains ${(Math.abs(maxCorr) * 100).toFixed(0)}% of the variance between these variables.`,
+          metric: `r = ${maxCorr > 0 ? "+" : ""}${maxCorr.toFixed(2)}`,
+          correlation: `R² = ${(maxCorr * maxCorr).toFixed(2)}`,
+          confidence: Math.abs(maxCorr) > 0.7 ? "High" : Math.abs(maxCorr) > 0.4 ? "Medium" : "Low",
+          type: "correlation",
+          icon: TrendingUp,
+          gradient: "from-[#00F5A0] to-[#00D9F5]",
+        })
+      }
     }
 
-    // Use Python analysis for categorical distribution
-    if (pythonAnalysis && pythonAnalysis.top_categories.length > 0) {
-      const topCat = pythonAnalysis.top_categories[0]
-      const counts = Object.entries(topCat.value_counts)
+    // Analyze categorical distribution
+    if (categoricalColumns.length > 0) {
+      const col = categoricalColumns[0]
+      const counts = getValueCounts(storedDataset.data, col.name)
       if (counts.length > 0) {
-        const [topValue, topCount] = counts[0]
-        const percentage = ((topCount / storedDataset.rows) * 100).toFixed(1)
+        const topCategory = counts[0]
+        const percentage = ((topCategory.count / storedDataset.rows) * 100).toFixed(1)
         
         generatedInsights.push({
           id: insightId++,
-          title: `${topCat.column} Distribution Pattern`,
-          description: `"${topValue}" dominates with ${percentage}% of records. ${counts.length} unique categories found in this column.`,
+          title: `${col.name} Distribution Pattern`,
+          description: `"${topCategory.value}" dominates with ${percentage}% of records. ${counts.length} unique categories found in this column.`,
           metric: `${percentage}%`,
           correlation: `${counts.length} categories`,
           confidence: "High",
@@ -123,16 +143,18 @@ export default function InsightsPage() {
       }
     }
 
-    // Use Python statistical summary for numeric insights
-    if (pythonAnalysis && pythonAnalysis.statistical_summary.length > 0) {
-      const stat = pythonAnalysis.statistical_summary[0]
+    // Numeric column insights
+    if (numericColumns.length > 0) {
+      const col = numericColumns[0]
+      const values = getNumericValues(storedDataset.data, col.name)
+      const stats = calculateStats(values)
       
       generatedInsights.push({
         id: insightId++,
-        title: `${stat.column} Statistics (Python/NumPy)`,
-        description: `Average value is ${stat.mean.toLocaleString(undefined, { maximumFractionDigits: 2 })} with a standard deviation of ${stat.std_dev.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Range spans from ${stat.min_val.toLocaleString(undefined, { maximumFractionDigits: 2 })} to ${stat.max_val.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
-        metric: `Avg: ${stat.mean.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-        correlation: `SD: ${stat.std_dev.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+        title: `${col.name} Statistics`,
+        description: `Average value is ${stats.mean.toLocaleString(undefined, { maximumFractionDigits: 2 })} with a standard deviation of ${stats.stdDev.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Range spans from ${stats.min.toLocaleString(undefined, { maximumFractionDigits: 2 })} to ${stats.max.toLocaleString(undefined, { maximumFractionDigits: 2 })}.`,
+        metric: `Avg: ${stats.mean.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+        correlation: `SD: ${stats.stdDev.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
         confidence: "High",
         type: "statistics",
         icon: BarChart3,
@@ -140,13 +162,8 @@ export default function InsightsPage() {
       })
     }
 
-    // Data quality insight using Python missing summary
-    let totalMissing = 0
-    if (pythonAnalysis) {
-      totalMissing = Object.values(pythonAnalysis.missing_summary).reduce((a, b) => a + b, 0)
-    } else {
-      totalMissing = storedDataset.columns.reduce((sum, col) => sum + col.missing, 0)
-    }
+    // Data quality insight
+    const totalMissing = storedDataset.columns.reduce((sum, col) => sum + col.missing, 0)
     const totalCells = storedDataset.rows * storedDataset.columns.length
     const completeness = ((1 - totalMissing / totalCells) * 100).toFixed(1)
     

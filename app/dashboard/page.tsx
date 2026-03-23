@@ -21,6 +21,10 @@ import {
   Upload,
 } from "lucide-react"
 import {
+  getDataset,
+  calculateStats,
+  calculateCorrelation,
+  getNumericValues,
   type DatasetInfo,
   type DatasetColumn,
 } from "@/lib/data-utils"
@@ -75,6 +79,17 @@ function getCorrelationStrength(value: number): string {
   return value > 0 ? "Weak Positive" : "Weak Negative"
 }
 
+function calculateSkewness(values: number[]): number {
+  if (values.length < 3) return 0
+  const n = values.length
+  const mean = values.reduce((a, b) => a + b, 0) / n
+  const m3 = values.reduce((acc, v) => acc + Math.pow(v - mean, 3), 0) / n
+  const m2 = values.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / n
+  const s = Math.sqrt(m2)
+  if (s === 0) return 0
+  return m3 / Math.pow(s, 3)
+}
+
 export default function DashboardPage() {
   const [dataset, setDataset] = useState<DatasetInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -88,77 +103,79 @@ export default function DashboardPage() {
   useEffect(() => {
     // Read directly from localStorage
     const stored = localStorage.getItem("dataset")
+    console.log("LOADED DATA:", stored ? JSON.parse(stored).data?.length : 0)
     
     if (!stored) {
+      console.log("[v0] Dashboard: No dataset found in localStorage")
       setNoDataset(true)
       setLoading(false)
       return
     }
 
     const storedDataset: DatasetInfo = JSON.parse(stored)
+    console.log("[v0] Dashboard: Dataset loaded:", storedDataset.name, "rows:", storedDataset.rows)
     setDataset(storedDataset)
 
-    // Use Python analysis results if available
-    const pythonAnalysis = storedDataset.pythonAnalysis
-
-    if (pythonAnalysis) {
-      // Use pre-computed Python analysis from Pandas/NumPy
-      const stats: StatisticalSummary[] = pythonAnalysis.statistical_summary.slice(0, 6).map(stat => ({
-        column: stat.column,
-        mean: stat.mean.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-        median: stat.median.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-        stdDev: stat.std_dev.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-        min: stat.min_val.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-        max: stat.max_val.toLocaleString(undefined, { maximumFractionDigits: 2 }),
-        skewness: stat.skewness > 0.5 ? "Right-skewed" : stat.skewness < -0.5 ? "Left-skewed" : "Normal",
-        skewnessValue: stat.skewness,
-      }))
-      setStatisticalSummary(stats)
-
-      // Use pre-computed correlations from Python
-      const corrPairs: CorrelationData[] = pythonAnalysis.correlation_matrix.slice(0, 6).map(corr => ({
-        pair: `${corr.column1} vs ${corr.column2}`,
-        value: corr.correlation,
-        strength: getCorrelationStrength(corr.correlation),
-      }))
-      setCorrelations(corrPairs)
-
-      // Use pre-computed missing values from Python
-      const missingData = Object.entries(pythonAnalysis.missing_summary)
-        .map(([column, missing]) => ({
-          column,
-          missing,
-          percentage: ((missing / storedDataset.rows) * 100).toFixed(2) + "%",
-        }))
-        .slice(0, 5)
+    // Calculate statistical summary for numerical columns
+    const numericColumns = storedDataset.columns.filter(col => col.type === "Numerical")
+    const stats: StatisticalSummary[] = numericColumns.slice(0, 6).map(col => {
+      const values = getNumericValues(storedDataset.data, col.name)
+      const statsResult = calculateStats(values)
+      const skewness = calculateSkewness(values)
       
-      const missingCount = Object.values(pythonAnalysis.missing_summary).reduce((a, b) => a + b, 0)
-      setMissingByColumn(missingData)
-      setTotalMissing(missingCount)
-      
-      const totalCells = storedDataset.rows * storedDataset.columns.length
-      setCompleteness(totalCells > 0 ? ((1 - missingCount / totalCells) * 100) : 100)
-    } else {
-      // Fallback: use column-level missing info from dataset
-      const totalCells = storedDataset.rows * storedDataset.columns.length
-      let missingCount = 0
-      const missingData = storedDataset.columns
-        .filter(col => col.missing > 0)
-        .map(col => {
-          missingCount += col.missing
-          return {
-            column: col.name,
-            missing: col.missing,
-            percentage: ((col.missing / storedDataset.rows) * 100).toFixed(2) + "%",
-          }
+      return {
+        column: col.name,
+        mean: statsResult.mean.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        median: statsResult.median.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        stdDev: statsResult.stdDev.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        min: statsResult.min.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        max: statsResult.max.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        skewness: skewness > 0.5 ? "Right-skewed" : skewness < -0.5 ? "Left-skewed" : "Normal",
+        skewnessValue: skewness,
+      }
+    })
+    setStatisticalSummary(stats)
+
+    // Calculate correlations between numeric columns
+    const corrPairs: CorrelationData[] = []
+    for (let i = 0; i < Math.min(numericColumns.length, 4); i++) {
+      for (let j = i + 1; j < Math.min(numericColumns.length, 4); j++) {
+        const col1 = numericColumns[i]
+        const col2 = numericColumns[j]
+        const values1 = getNumericValues(storedDataset.data, col1.name)
+        const values2 = getNumericValues(storedDataset.data, col2.name)
+        
+        // Align values (only use rows where both have values)
+        const minLen = Math.min(values1.length, values2.length)
+        const r = calculateCorrelation(values1.slice(0, minLen), values2.slice(0, minLen))
+        
+        corrPairs.push({
+          pair: `${col1.name} vs ${col2.name}`,
+          value: r,
+          strength: getCorrelationStrength(r),
         })
-        .slice(0, 5)
-      
-      setMissingByColumn(missingData)
-      setTotalMissing(missingCount)
-      setCompleteness(totalCells > 0 ? ((1 - missingCount / totalCells) * 100) : 100)
+      }
     }
+    setCorrelations(corrPairs.slice(0, 6))
+
+    // Calculate missing values
+    const totalCells = storedDataset.rows * storedDataset.columns.length
+    let missingCount = 0
+    const missingData = storedDataset.columns
+      .filter(col => col.missing > 0)
+      .map(col => {
+        missingCount += col.missing
+        return {
+          column: col.name,
+          missing: col.missing,
+          percentage: ((col.missing / storedDataset.rows) * 100).toFixed(2) + "%",
+        }
+      })
+      .slice(0, 5)
     
+    setMissingByColumn(missingData)
+    setTotalMissing(missingCount)
+    setCompleteness(totalCells > 0 ? ((1 - missingCount / totalCells) * 100) : 100)
     setLoading(false)
   }, [])
 
